@@ -1,0 +1,109 @@
+// donut.c
+// Compile: gcc -O2 donut.c -lm -o donut
+// Run: ./donut
+
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+#include <unistd.h>   // for usleep (POSIX). On Windows replace with Sleep(ms) from windows.h
+
+// Screen size (tweakable)
+const int screen_width = 80;
+const int screen_height = 24;
+
+const float theta_spacing = 0.07f;
+const float phi_spacing   = 0.02f;
+
+const float R1 = 1.0f;   // tube radius
+const float R2 = 2.0f;   // distance from center of tube to center of torus
+const float K2 = 5.0f;   // distance from viewer to torus
+
+// K1 computed once from screen width so projection fits nicely
+const float K1_FACTOR = 3.0f / 8.0f; // used in formula
+
+int main(void) {
+    // compute K1 using same formula from your comment:
+    const float K1 = (float)screen_width * K2 * K1_FACTOR / (R1 + R2);
+
+    // characters used for luminance from dark -> bright
+    const char luminance_chars[] = ".,-~:;=!*#$@";
+    const int n_lum = (int)strlen(luminance_chars);
+
+    float A = 0.0f; // rotation around x-axis
+    float B = 0.0f; // rotation around z-axis
+
+    // animation loop
+    for (;;) {
+        // buffers: use [row][col] layout for convenience when printing
+        static char output[screen_height][screen_width + 1]; // +1 for nul terminator per row
+        static float zbuffer[screen_height][screen_width];
+
+        // initialize output and zbuffer
+        for (int y = 0; y < screen_height; ++y) {
+            for (int x = 0; x < screen_width; ++x) {
+                output[y][x] = ' ';
+                zbuffer[y][x] = 0.0f; // 0 means nothing plotted yet; ooz (1/z) will be > 0
+            }
+            output[y][screen_width] = '\0';
+        }
+
+        float cosA = cosf(A), sinA = sinf(A);
+        float cosB = cosf(B), sinB = sinf(B);
+
+        for (float theta = 0.0f; theta < 2.0f * M_PI; theta += theta_spacing) {
+            float costheta = cosf(theta), sintheta = sinf(theta);
+            for (float phi = 0.0f; phi < 2.0f * M_PI; phi += phi_spacing) {
+                float cosphi = cosf(phi), sinphi = sinf(phi);
+
+                // circle coords before revolving
+                float circlex = R2 + R1 * costheta;
+                float circley = R1 * sintheta;
+
+                // final 3D coordinates after rotations
+                float x = circlex * (cosB * cosphi + sinA * sinB * sinphi) - circley * cosA * sinB;
+                float y = circlex * (sinB * cosphi - sinA * cosB * sinphi) + circley * cosA * cosB;
+                float z = K2 + cosA * circlex * sinphi + circley * sinA;
+
+                float ooz = 1.0f / z; // "one over z"
+
+                // project to 2D screen coords (centered)
+                int xp = (int)((float)screen_width / 2.0f + K1 * ooz * x);
+                int yp = (int)((float)screen_height / 2.0f - K1 * ooz * y); // y inverted for screen coords
+
+                // compute luminance
+                float L = cosphi * costheta * sinB - cosA * costheta * sinphi - sinA * sintheta
+                          + cosB * (cosA * sintheta - costheta * sinA * sinphi);
+
+                if (L > 0) {
+                    // bounds check before indexing buffers
+                    if (xp >= 0 && xp < screen_width && yp >= 0 && yp < screen_height) {
+                        if (ooz > zbuffer[yp][xp]) {
+                            zbuffer[yp][xp] = ooz;
+                            int luminance_index = (int)(L * 8.0f); // scale L
+                            // clamp to valid range 0..n_lum-1
+                            if (luminance_index < 0) luminance_index = 0;
+                            if (luminance_index >= n_lum) luminance_index = n_lum - 1;
+                            output[yp][xp] = luminance_chars[luminance_index];
+                        }
+                    }
+                }
+            }
+        }
+
+        // move cursor to home and clear screen (ANSI)
+        printf("\x1b[H");  // home
+        // print buffer rows
+        for (int y = 0; y < screen_height; ++y) {
+            printf("%s\n", output[y]);
+        }
+
+        // advance rotation angles
+        A += 0.04f;
+        B += 0.02f;
+
+        // pause for a short time (microseconds). ~30 FPS -> 33333 us
+        usleep(33000);
+    }
+
+    return 0;
+}
